@@ -1,5 +1,4 @@
 import { NextRequest } from "next/server";
-import { isPlatformUrl, resolveVideo } from "@/lib/cobalt";
 
 export const runtime = "edge";
 
@@ -25,23 +24,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    let fetchUrl = parsedUrl.toString();
-
-    // If platform URL (YouTube, TikTok, etc), resolve via cobalt first
-    if (isPlatformUrl(fetchUrl)) {
-      try {
-        fetchUrl = await resolveVideo(fetchUrl, "720");
-      } catch (e: any) {
-        return Response.json(
-          { error: `Failed to resolve video: ${e.message}` },
-          { status: 502 }
-        );
-      }
-    }
-
-    // Fetch the video (direct URL or cobalt stream URL)
-    const res = await fetch(fetchUrl, {
-      headers: { "User-Agent": "Clipper/1.0" },
+    // Fetch the video directly (URL is already resolved by client)
+    const res = await fetch(parsedUrl.toString(), {
+      headers: { "User-Agent": "Mozilla/5.0" },
       redirect: "follow",
     });
 
@@ -52,14 +37,14 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const contentType = res.headers.get("content-type") || "";
+    const contentType = res.headers.get("content-type") || "video/mp4";
     const contentLength = parseInt(
       res.headers.get("content-length") || "0",
       10
     );
 
     const headers = new Headers();
-    headers.set("Content-Type", contentType || "video/mp4");
+    headers.set("Content-Type", contentType);
     if (contentLength) {
       headers.set("Content-Length", contentLength.toString());
     }

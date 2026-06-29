@@ -95,28 +95,71 @@ export default function Home() {
   };
 
   // --- Fetch video from URL ---
+  const isYouTubeUrl = (url: string) => {
+    try {
+      const h = new URL(url).hostname.toLowerCase();
+      return h.includes("youtube.com") || h.includes("youtu.be");
+    } catch {
+      return false;
+    }
+  };
+
   const fetchFromUrl = async () => {
     if (!urlInput.trim()) return;
     setFetchingUrl(true);
     setError("");
     try {
-      const res = await fetch("/api/fetch-video", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: urlInput.trim() }),
-      });
+      if (isYouTubeUrl(urlInput.trim())) {
+        // YouTube: resolve first, then fetch the video
+        const resolveRes = await fetch("/api/resolve-youtube", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: urlInput.trim() }),
+        });
 
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({ error: "Fetch failed" }));
-        throw new Error(data.error || `Failed to fetch video (HTTP ${res.status})`);
+        if (!resolveRes.ok) {
+          const data = await resolveRes.json().catch(() => ({ error: "Resolve failed" }));
+          throw new Error(data.error || "Failed to resolve YouTube URL");
+        }
+
+        const { videoUrl: directUrl, title } = await resolveRes.json();
+
+        // Fetch the resolved video URL through proxy
+        const videoRes = await fetch("/api/fetch-video", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: directUrl }),
+        });
+
+        if (!videoRes.ok) {
+          const data = await videoRes.json().catch(() => ({ error: "Fetch failed" }));
+          throw new Error(data.error || "Failed to fetch video");
+        }
+
+        const blob = await videoRes.blob();
+        const fetchedFile = new File([blob], `${title || "youtube"}.mp4`, {
+          type: "video/mp4",
+        });
+        handleFileSelect(fetchedFile, urlInput.trim());
+      } else {
+        // Direct URL: fetch directly
+        const res = await fetch("/api/fetch-video", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: urlInput.trim() }),
+        });
+
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({ error: "Fetch failed" }));
+          throw new Error(data.error || `Failed to fetch video (HTTP ${res.status})`);
+        }
+
+        const blob = await res.blob();
+        const contentType = blob.type || "video/mp4";
+        const ext = contentType.includes("audio") ? "mp3" : "mp4";
+        const fetchedFile = new File([blob], `url-video.${ext}`, { type: contentType });
+        handleFileSelect(fetchedFile, urlInput.trim());
       }
-
-      const blob = await res.blob();
-      const contentType = blob.type || "video/mp4";
-      const ext = contentType.includes("audio") ? "mp3" : "mp4";
-      const fetchedFile = new File([blob], `url-video.${ext}`, { type: contentType });
-
-      handleFileSelect(fetchedFile, urlInput.trim());
     } catch (e: any) {
       setError(e.message);
     } finally {

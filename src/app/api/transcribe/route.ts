@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import Groq from "groq-sdk";
-import { isPlatformUrl, resolveAudio } from "@/lib/cobalt";
+import ytdl from "@distube/ytdl-core";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -25,7 +25,7 @@ export async function POST(req: NextRequest) {
     let file: File | null = null;
     const contentType = req.headers.get("content-type") || "";
 
-    // Check if request is JSON (has sourceUrl for platform URLs like YouTube)
+    // Check if request is JSON (has sourceUrl for YouTube)
     if (contentType.includes("application/json")) {
       const body = await req.json();
       const sourceUrl = body.sourceUrl;
@@ -37,27 +37,30 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      if (!isPlatformUrl(sourceUrl)) {
+      if (!ytdl.validateURL(sourceUrl)) {
         return NextResponse.json(
-          { error: "sourceUrl must be a platform URL (YouTube, TikTok, etc)" },
+          { error: "sourceUrl must be a valid YouTube URL" },
           { status: 400 }
         );
       }
 
-      // Resolve audio-only via cobalt (small file, bypasses 25MB limit)
-      let audioUrl: string;
-      try {
-        audioUrl = await resolveAudio(sourceUrl, "mp3", "128");
-      } catch (e: any) {
+      // Get audio-only stream URL via ytdl-core
+      const info = await ytdl.getInfo(sourceUrl);
+      const audioFormat = ytdl.chooseFormat(info.formats, {
+        quality: "lowestaudio",
+        filter: "audioonly",
+      });
+
+      if (!audioFormat?.url) {
         return NextResponse.json(
-          { error: `Failed to resolve audio: ${e.message}` },
-          { status: 502 }
+          { error: "Could not extract audio from YouTube video" },
+          { status: 500 }
         );
       }
 
       // Fetch the audio
-      const audioRes = await fetch(audioUrl, {
-        headers: { "User-Agent": "Clipper/1.0" },
+      const audioRes = await fetch(audioFormat.url, {
+        headers: { "User-Agent": "Mozilla/5.0" },
         redirect: "follow",
       });
 
@@ -81,7 +84,7 @@ export async function POST(req: NextRequest) {
         );
       }
     } else {
-      // FormData with file upload (existing behavior)
+      // FormData with file upload
       const formData = await req.formData();
       file = formData.get("file") as File | null;
 
@@ -92,7 +95,6 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      // Check 25MB limit
       if (file.size > 25 * 1024 * 1024) {
         return NextResponse.json(
           {
