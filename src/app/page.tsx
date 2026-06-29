@@ -24,6 +24,7 @@ export default function Home() {
   const [urlInput, setUrlInput] = useState("");
   const [fetchingUrl, setFetchingUrl] = useState(false);
   const [sourceUrl, setSourceUrl] = useState<string>("");
+  const [youtubeAudioUrl, setYoutubeAudioUrl] = useState<string>("");
   const [transcription, setTranscription] = useState<TranscriptionResult | null>(null);
   const [transcribing, setTranscribing] = useState(false);
   const [error, setError] = useState("");
@@ -110,8 +111,10 @@ export default function Home() {
     setError("");
     try {
       if (isYouTubeUrl(urlInput.trim())) {
-        // YouTube: resolve first, then fetch the video
-        const resolveRes = await fetch("/api/resolve-youtube", {
+        // YouTube: resolve via local yt-dlp server, then fetch video
+        const LOCAL = "http://localhost:8787";
+
+        const resolveRes = await fetch(`${LOCAL}/resolve`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ url: urlInput.trim() }),
@@ -122,18 +125,17 @@ export default function Home() {
           throw new Error(data.error || "Failed to resolve YouTube URL");
         }
 
-        const { videoUrl: directUrl, title } = await resolveRes.json();
+        const { videoUrl, audioUrl, title } = await resolveRes.json();
 
-        // Fetch the resolved video URL through proxy
-        const videoRes = await fetch("/api/fetch-video", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url: directUrl }),
-        });
+        // Store audio URL for transcription later
+        setYoutubeAudioUrl(audioUrl || "");
+
+        // Fetch the video through local proxy (CORS bypass)
+        const proxyUrl = `${LOCAL}/proxy?url=${encodeURIComponent(videoUrl)}`;
+        const videoRes = await fetch(proxyUrl);
 
         if (!videoRes.ok) {
-          const data = await videoRes.json().catch(() => ({ error: "Fetch failed" }));
-          throw new Error(data.error || "Failed to fetch video");
+          throw new Error(`Failed to fetch video (HTTP ${videoRes.status})`);
         }
 
         const blob = await videoRes.blob();
@@ -142,7 +144,7 @@ export default function Home() {
         });
         handleFileSelect(fetchedFile, urlInput.trim());
       } else {
-        // Direct URL: fetch directly
+        // Direct URL: fetch through Vercel proxy
         const res = await fetch("/api/fetch-video", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -161,7 +163,13 @@ export default function Home() {
         handleFileSelect(fetchedFile, urlInput.trim());
       }
     } catch (e: any) {
-      setError(e.message);
+      if (e.message.includes("Failed to fetch") || e.message.includes("NetworkError")) {
+        setError(
+          "Cannot connect to local yt-dlp server. Run: python3 yt-dlp-server.py (in /root/clipper)"
+        );
+      } else {
+        setError(e.message);
+      }
     } finally {
       setFetchingUrl(false);
     }
@@ -196,16 +204,33 @@ export default function Home() {
     try {
       let res: Response;
 
-      if (sourceUrl) {
-        // Platform URL (YouTube, etc) — send sourceUrl as JSON
-        // Server resolves audio-only via cobalt (small file, bypasses 25MB limit)
+      if (youtubeAudioUrl) {
+        // YouTube: fetch audio via local yt-dlp proxy, send as file
+        const LOCAL = "http://localhost:8787";
+        const proxyUrl = `${LOCAL}/proxy?url=${encodeURIComponent(youtubeAudioUrl)}`;
+        const audioRes = await fetch(proxyUrl);
+
+        if (!audioRes.ok) {
+          throw new Error(`Failed to fetch audio (HTTP ${audioRes.status})`);
+        }
+
+        const audioBlob = await audioRes.blob();
+        const audioFile = new File([audioBlob], "audio.m4a", {
+          type: "audio/mp4",
+        });
+
+        if (audioFile.size > 25 * 1024 * 1024) {
+          throw new Error(
+            `Audio too large (${(audioFile.size / 1024 / 1024).toFixed(1)}MB). Try a shorter video.`
+          );
+        }
+
+        const formData = new FormData();
+        formData.append("file", audioFile);
         res = await fetch("/api/transcribe", {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-groq-key": apiKey,
-          },
-          body: JSON.stringify({ sourceUrl }),
+          headers: { "x-groq-key": apiKey },
+          body: formData,
         });
       } else {
         // Direct file upload
@@ -493,17 +518,17 @@ export default function Home() {
                 </div>
                 <div className="mt-3 space-y-1">
                   <p className="text-xs text-slate-500">
-                    ✅ YouTube, TikTok, Instagram, X, Facebook, Vimeo, dll
+                    ✅ YouTube (all resolutions) — via local yt-dlp
                   </p>
                   <p className="text-xs text-slate-500">
                     ✅ Direct video/audio URLs (.mp4, .webm, .mp3, .wav)
                   </p>
-                  <p className="text-xs text-slate-500">
-                    ✅ Google Drive / Dropbox direct download links
-                  </p>
-                  <p className="text-xs text-slate-600 mt-2">
-                    Video di-fetch via cobalt API + server proxy. Transcribe pakai
-                    audio-only (lolos 25MB limit). Clip processing pakai video asli.
+                  <p className="text-xs text-amber-500/70 mt-2">
+                    ⚠️ Butuh local server: jalankan{" "}
+                    <code className="text-amber-400">
+                      python3 yt-dlp-server.py
+                    </code>{" "}
+                    di /root/clipper
                   </p>
                 </div>
               </div>
@@ -793,6 +818,7 @@ export default function Home() {
                   setVideoUrl("");
                   setUrlInput("");
                   setSourceUrl("");
+                  setYoutubeAudioUrl("");
                   setInputMode("upload");
                   setTranscription(null);
                   setSuggestions([]);
