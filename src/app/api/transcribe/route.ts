@@ -56,7 +56,7 @@ export async function POST(req: NextRequest) {
       }
 
       // Fetch the audio
-      const audioRes = await fetch(audioFormat.url, {
+      const audioRes = await fetch(audioUrl, {
         headers: { "User-Agent": "Mozilla/5.0" },
         redirect: "follow",
       });
