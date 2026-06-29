@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import Groq from "groq-sdk";
-import ytdl from "@distube/ytdl-core";
+import { isValidYouTubeUrl, resolveYouTubeAudio } from "@/lib/youtube";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -37,24 +37,21 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      if (!ytdl.validateURL(sourceUrl)) {
+      if (!isValidYouTubeUrl(sourceUrl)) {
         return NextResponse.json(
           { error: "sourceUrl must be a valid YouTube URL" },
           { status: 400 }
         );
       }
 
-      // Get audio-only stream URL via ytdl-core
-      const info = await ytdl.getInfo(sourceUrl);
-      const audioFormat = ytdl.chooseFormat(info.formats, {
-        quality: "lowestaudio",
-        filter: "audioonly",
-      });
-
-      if (!audioFormat?.url) {
+      // Get audio-only stream URL via Innertube API
+      let audioUrl: string;
+      try {
+        audioUrl = await resolveYouTubeAudio(sourceUrl);
+      } catch (e: any) {
         return NextResponse.json(
-          { error: "Could not extract audio from YouTube video" },
-          { status: 500 }
+          { error: `Failed to resolve audio: ${e.message}` },
+          { status: 502 }
         );
       }
 
