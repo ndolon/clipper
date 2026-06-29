@@ -20,6 +20,9 @@ export default function Home() {
   const [showKeyInput, setShowKeyInput] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [videoUrl, setVideoUrl] = useState<string>("");
+  const [inputMode, setInputMode] = useState<"upload" | "url">("upload");
+  const [urlInput, setUrlInput] = useState("");
+  const [fetchingUrl, setFetchingUrl] = useState(false);
   const [transcription, setTranscription] = useState<TranscriptionResult | null>(null);
   const [transcribing, setTranscribing] = useState(false);
   const [error, setError] = useState("");
@@ -87,6 +90,43 @@ export default function Home() {
     setSelectedEnd(30);
     // Preload ffmpeg in background
     ensureFFmpeg();
+  };
+
+  // --- Fetch video from URL ---
+  const fetchFromUrl = async () => {
+    if (!urlInput.trim()) return;
+    setFetchingUrl(true);
+    setError("");
+    try {
+      const res = await fetch("/api/fetch-video", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: urlInput.trim() }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({ error: "Fetch failed" }));
+        throw new Error(data.error || `Failed to fetch video (HTTP ${res.status})`);
+      }
+
+      const blob = await res.blob();
+      const contentType = blob.type || "video/mp4";
+      const ext = contentType.includes("audio") ? "mp3" : "mp4";
+      const fetchedFile = new File([blob], `url-video.${ext}`, { type: contentType });
+
+      // Check size
+      if (blob.size > 25 * 1024 * 1024) {
+        throw new Error(
+          `Video too large (${(blob.size / 1024 / 1024).toFixed(1)}MB). Max 25MB.`
+        );
+      }
+
+      handleFileSelect(fetchedFile);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setFetchingUrl(false);
+    }
   };
 
   const onDrop = useCallback(
@@ -315,30 +355,100 @@ export default function Home() {
           </div>
         )}
 
-        {/* Upload Area */}
+        {/* Input Area */}
         {!file && (
-          <div
-            onClick={() => fileInputRef.current?.click()}
-            className="border-2 border-dashed border-slate-700 rounded-2xl p-16 text-center cursor-pointer hover:border-indigo-600 hover:bg-slate-900/30 transition"
-          >
-            <div className="text-5xl mb-4">🎬</div>
-            <p className="text-lg font-medium mb-1">Drop video or audio here</p>
-            <p className="text-sm text-slate-500">
-              or click to browse — MP4, WebM, MP3, WAV, M4A
-            </p>
-            <p className="text-xs text-slate-600 mt-3">
-              Max 25MB (Groq Whisper limit)
-            </p>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="video/*,audio/*"
-              className="hidden"
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) handleFileSelect(f);
-              }}
-            />
+          <div>
+            {/* Tab toggle */}
+            <div className="flex gap-2 mb-4">
+              <button
+                onClick={() => setInputMode("upload")}
+                className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition ${
+                  inputMode === "upload"
+                    ? "bg-indigo-600 text-white"
+                    : "bg-slate-800 text-slate-400 hover:bg-slate-700"
+                }`}
+              >
+                📁 Upload File
+              </button>
+              <button
+                onClick={() => setInputMode("url")}
+                className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition ${
+                  inputMode === "url"
+                    ? "bg-indigo-600 text-white"
+                    : "bg-slate-800 text-slate-400 hover:bg-slate-700"
+                }`}
+              >
+                🔗 Paste URL
+              </button>
+            </div>
+
+            {/* Upload mode */}
+            {inputMode === "upload" && (
+              <div
+                onClick={() => fileInputRef.current?.click()}
+                className="border-2 border-dashed border-slate-700 rounded-2xl p-16 text-center cursor-pointer hover:border-indigo-600 hover:bg-slate-900/30 transition"
+              >
+                <div className="text-5xl mb-4">🎬</div>
+                <p className="text-lg font-medium mb-1">Drop video or audio here</p>
+                <p className="text-sm text-slate-500">
+                  or click to browse — MP4, WebM, MP3, WAV, M4A
+                </p>
+                <p className="text-xs text-slate-600 mt-3">
+                  Max 25MB (Groq Whisper limit)
+                </p>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="video/*,audio/*"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) handleFileSelect(f);
+                  }}
+                />
+              </div>
+            )}
+
+            {/* URL mode */}
+            {inputMode === "url" && (
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+                <label className="block text-sm font-medium mb-2">
+                  Video URL
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="url"
+                    value={urlInput}
+                    onChange={(e) => setUrlInput(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && !fetchingUrl && fetchFromUrl()}
+                    placeholder="https://example.com/video.mp4"
+                    className="flex-1 bg-slate-800 border border-slate-700 rounded px-3 py-2.5 text-sm focus:outline-none focus:border-indigo-500"
+                    disabled={fetchingUrl}
+                  />
+                  <button
+                    onClick={fetchFromUrl}
+                    disabled={fetchingUrl || !urlInput.trim()}
+                    className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-500 rounded text-sm font-medium transition"
+                  >
+                    {fetchingUrl ? "⏳ Fetching..." : "Fetch"}
+                  </button>
+                </div>
+                <div className="mt-3 space-y-1">
+                  <p className="text-xs text-slate-500">
+                    ✅ Direct video/audio URLs (https://...mp4, .webm, .mp3, .wav)
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    ✅ Google Drive / Dropbox direct download links
+                  </p>
+                  <p className="text-xs text-amber-500/60">
+                    ❌ YouTube / TikTok / Instagram links (tidak didukung)
+                  </p>
+                  <p className="text-xs text-slate-600 mt-2">
+                    Max 25MB — video di-fetch via server proxy (bypass CORS)
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -622,6 +732,8 @@ export default function Home() {
                   if (videoUrl) URL.revokeObjectURL(videoUrl);
                   setFile(null);
                   setVideoUrl("");
+                  setUrlInput("");
+                  setInputMode("upload");
                   setTranscription(null);
                   setSuggestions([]);
                   setResult(null);
@@ -630,7 +742,7 @@ export default function Home() {
                 }}
                 className="w-full py-2 text-sm text-slate-500 hover:text-slate-300 transition"
               >
-                ← Upload different file
+                ← Start over
               </button>
             </div>
           </div>
