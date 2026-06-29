@@ -120,7 +120,7 @@ export async function processClip(
   await ff.exec(args);
 
   const data = await ff.readFile("output.mp4");
-  const blob = new Blob([data as Uint8Array], { type: "video/mp4" });
+  const blob = new Blob([data as unknown as BlobPart], { type: "video/mp4" });
 
   // Cleanup
   try {
