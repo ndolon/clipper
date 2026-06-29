@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { isPlatformUrl, resolveVideo } from "@/lib/cobalt";
 
 export const runtime = "edge";
 
@@ -10,7 +11,6 @@ export async function POST(req: NextRequest) {
       return Response.json({ error: "No URL provided" }, { status: 400 });
     }
 
-    // Validate URL
     let parsedUrl: URL;
     try {
       parsedUrl = new URL(url);
@@ -18,7 +18,6 @@ export async function POST(req: NextRequest) {
       return Response.json({ error: "Invalid URL" }, { status: 400 });
     }
 
-    // Only allow http/https
     if (!["http:", "https:"].includes(parsedUrl.protocol)) {
       return Response.json(
         { error: "Only http/https URLs are supported" },
@@ -26,8 +25,22 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Fetch the video server-side (bypass CORS)
-    const res = await fetch(parsedUrl.toString(), {
+    let fetchUrl = parsedUrl.toString();
+
+    // If platform URL (YouTube, TikTok, etc), resolve via cobalt first
+    if (isPlatformUrl(fetchUrl)) {
+      try {
+        fetchUrl = await resolveVideo(fetchUrl, "720");
+      } catch (e: any) {
+        return Response.json(
+          { error: `Failed to resolve video: ${e.message}` },
+          { status: 502 }
+        );
+      }
+    }
+
+    // Fetch the video (direct URL or cobalt stream URL)
+    const res = await fetch(fetchUrl, {
       headers: { "User-Agent": "Clipper/1.0" },
       redirect: "follow",
     });
@@ -45,34 +58,8 @@ export async function POST(req: NextRequest) {
       10
     );
 
-    // Validate content type — be lenient, some servers don't set proper MIME
-    const isVideo =
-      contentType.startsWith("video/") ||
-      contentType.startsWith("audio/") ||
-      contentType.includes("octet-stream") ||
-      contentType === "";
-    if (!isVideo) {
-      return Response.json(
-        {
-          error: `URL must point to a video/audio file (got: ${contentType || "unknown"})`,
-        },
-        { status: 400 }
-      );
-    }
-
-    // Check size (25MB Groq limit)
-    if (contentLength > 25 * 1024 * 1024) {
-      return Response.json(
-        {
-          error: `File too large (${(contentLength / 1024 / 1024).toFixed(1)}MB). Max 25MB for Groq Whisper.`,
-        },
-        { status: 413 }
-      );
-    }
-
-    // Stream the response back
     const headers = new Headers();
-    headers.set("Content-Type", contentType || "application/octet-stream");
+    headers.set("Content-Type", contentType || "video/mp4");
     if (contentLength) {
       headers.set("Content-Length", contentLength.toString());
     }

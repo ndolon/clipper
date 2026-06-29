@@ -23,6 +23,7 @@ export default function Home() {
   const [inputMode, setInputMode] = useState<"upload" | "url">("upload");
   const [urlInput, setUrlInput] = useState("");
   const [fetchingUrl, setFetchingUrl] = useState(false);
+  const [sourceUrl, setSourceUrl] = useState<string>("");
   const [transcription, setTranscription] = useState<TranscriptionResult | null>(null);
   const [transcribing, setTranscribing] = useState(false);
   const [error, setError] = useState("");
@@ -77,12 +78,13 @@ export default function Home() {
   }, [ffmpegReady]);
 
   // --- File handling ---
-  const handleFileSelect = (f: File) => {
+  const handleFileSelect = (f: File, srcUrl?: string) => {
     setError("");
     setResult(null);
     setTranscription(null);
     setSuggestions([]);
     setFile(f);
+    setSourceUrl(srcUrl || "");
     if (videoUrl) URL.revokeObjectURL(videoUrl);
     setVideoUrl(URL.createObjectURL(f));
     // Default selection to first 30s
@@ -114,14 +116,7 @@ export default function Home() {
       const ext = contentType.includes("audio") ? "mp3" : "mp4";
       const fetchedFile = new File([blob], `url-video.${ext}`, { type: contentType });
 
-      // Check size
-      if (blob.size > 25 * 1024 * 1024) {
-        throw new Error(
-          `Video too large (${(blob.size / 1024 / 1024).toFixed(1)}MB). Max 25MB.`
-        );
-      }
-
-      handleFileSelect(fetchedFile);
+      handleFileSelect(fetchedFile, urlInput.trim());
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -145,7 +140,7 @@ export default function Home() {
 
   // --- Transcription ---
   const transcribe = async () => {
-    if (!file) return;
+    if (!file && !sourceUrl) return;
     if (!apiKey) {
       setShowKeyInput(true);
       return;
@@ -156,26 +151,46 @@ export default function Home() {
     setSuggestions([]);
 
     try {
-      const formData = new FormData();
-      formData.append("file", file);
+      let res: Response;
 
-      const res = await fetch("/api/transcribe", {
-        method: "POST",
-        headers: { "x-groq-key": apiKey },
-        body: formData,
-      });
+      if (sourceUrl) {
+        // Platform URL (YouTube, etc) — send sourceUrl as JSON
+        // Server resolves audio-only via cobalt (small file, bypasses 25MB limit)
+        res = await fetch("/api/transcribe", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-groq-key": apiKey,
+          },
+          body: JSON.stringify({ sourceUrl }),
+        });
+      } else {
+        // Direct file upload
+        const formData = new FormData();
+        formData.append("file", file!);
+        res = await fetch("/api/transcribe", {
+          method: "POST",
+          headers: { "x-groq-key": apiKey },
+          body: formData,
+        });
+      }
 
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Transcription failed");
 
       setTranscription(data);
-      // Set default selection to first segment range
       if (data.segments?.length > 0) {
         const first = data.segments[0];
         setSelectedStart(first.start);
         const endCandidate = first.start + 30;
-        const seg = data.segments.find((s: TranscriptSegment) => s.end >= endCandidate);
-        setSelectedEnd(seg ? Math.min(seg.end, first.start + 60) : Math.min(data.duration || 60, first.start + 30));
+        const seg = data.segments.find(
+          (s: TranscriptSegment) => s.end >= endCandidate
+        );
+        setSelectedEnd(
+          seg
+            ? Math.min(seg.end, first.start + 60)
+            : Math.min(data.duration || 60, first.start + 30)
+        );
       }
     } catch (e: any) {
       setError(e.message);
@@ -435,16 +450,17 @@ export default function Home() {
                 </div>
                 <div className="mt-3 space-y-1">
                   <p className="text-xs text-slate-500">
-                    ✅ Direct video/audio URLs (https://...mp4, .webm, .mp3, .wav)
+                    ✅ YouTube, TikTok, Instagram, X, Facebook, Vimeo, dll
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    ✅ Direct video/audio URLs (.mp4, .webm, .mp3, .wav)
                   </p>
                   <p className="text-xs text-slate-500">
                     ✅ Google Drive / Dropbox direct download links
                   </p>
-                  <p className="text-xs text-amber-500/60">
-                    ❌ YouTube / TikTok / Instagram links (tidak didukung)
-                  </p>
                   <p className="text-xs text-slate-600 mt-2">
-                    Max 25MB — video di-fetch via server proxy (bypass CORS)
+                    Video di-fetch via cobalt API + server proxy. Transcribe pakai
+                    audio-only (lolos 25MB limit). Clip processing pakai video asli.
                   </p>
                 </div>
               </div>
@@ -733,6 +749,7 @@ export default function Home() {
                   setFile(null);
                   setVideoUrl("");
                   setUrlInput("");
+                  setSourceUrl("");
                   setInputMode("upload");
                   setTranscription(null);
                   setSuggestions([]);
